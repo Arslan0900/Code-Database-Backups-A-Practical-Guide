@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Variables
+BACKUP_DIR="/var/www/active-colab"
+LOCAL_BACKUP_DIR="/var/backups/active-colab"
+S3_BUCKET="s3://pms-backups-bucket"
+RETENTION_DAYS=7
+
+# Ensure the backup directory exists
+mkdir -p $LOCAL_BACKUP_DIR
+
+# Count existing backup files and determine the next sequence number
+BACKUP_COUNT=$(ls $LOCAL_BACKUP_DIR | grep -c "active-colab-.*\.tar\.gz")
+NEXT_BACKUP_NUMBER=$((BACKUP_COUNT + 1))
+BACKUP_NAME="active-colab-$NEXT_BACKUP_NUMBER.tar.gz"
+
+# Create a compressed tarball of the active-colab directory
+tar -czf $LOCAL_BACKUP_DIR/$BACKUP_NAME -C $BACKUP_DIR .
+
+# Upload the backup file to S3
+if aws s3 cp $LOCAL_BACKUP_DIR/$BACKUP_NAME $S3_BUCKET; then
+    echo "Backup uploaded successfully: $BACKUP_NAME"
+else
+    echo "Failed to upload backup to S3."
+    exit 1  # Exit the script if the upload fails
+fi
+
+# Delete backup files older than 7 days
+find $LOCAL_BACKUP_DIR -type f -name "active-colab-*.tar.gz" -mtime +$RETENTION_DAYS -exec rm {} \;
+
+# Print status
+echo "Old backups deleted."

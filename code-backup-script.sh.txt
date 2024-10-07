@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Stop the script on any command failure
+set -e
+
+# Variables
+DB_NAME="sample_db"
+DB_USER="SAMPLE"
+BACKUP_DIR="/var/backups/DB"
+COUNTER_FILE="${BACKUP_DIR}/backup_counter.txt"
+S3_BUCKET="pms-backups-bucket"  # Your S3 bucket name
+
+# Create backup directory if it doesn't exist
+sudo mkdir -p "$BACKUP_DIR"
+
+# Initialize the backup counter if it doesn't exist
+if [ ! -f "$COUNTER_FILE" ]; then
+    echo "1" | sudo tee "$COUNTER_FILE"  # Start at backup number 1
+fi
+
+# Read the current backup number
+BACKUP_NUMBER=$(cat "$COUNTER_FILE")
+
+# Set the backup file names
+BACKUP_FILE="${BACKUP_DIR}/DB-backup-${BACKUP_NUMBER}.sql"
+ARCHIVE_FILE="${BACKUP_DIR}/DB-backup-${BACKUP_NUMBER}.tar.gz"
+
+# Dump the database to a .sql file using the credentials from ~/.my.cnf
+if !  mysqldump   -U "$DB_USER" "$DB_NAME" > "$BACKUP_FILE"; then
+    echo "Error: Database dump failed."
+    exit 1
+fi
+
+# Archive the SQL backup file (compress it to .tar.gz)
+if ! sudo tar -czf "$ARCHIVE_FILE" -C "$BACKUP_DIR" "$(basename "$BACKUP_FILE")"; then
+    echo "Error: Archiving the backup file failed."
+    exit 1
+fi
+
+# Upload the compressed archive to S3
+if ! aws s3 cp "$ARCHIVE_FILE" "s3://$S3_BUCKET/"; then
+    echo "Error: Upload to S3 failed."
+    exit 1
+fi
+
+# Optional: Remove backups older than 7 days
+sudo find "$BACKUP_DIR" -type f -name "DB-backup-*.tar.gz" -mtime +7 -exec rm {} \;
+
+# Remove the uncompressed .sql file after archiving
+sudo rm "$BACKUP_FILE"
+
+# Increment the backup number and save it back to the counter file
+NEXT_BACKUP_NUMBER=$((BACKUP_NUMBER + 1))
+echo "$NEXT_BACKUP_NUMBER" | sudo tee "$COUNTER_FILE"
+
+# Success message only shown if all steps were successful
+echo "Backup of $DB_NAME completed, archived, and uploaded to S3: $ARCHIVE_FILE"
+
